@@ -1,12 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import subprocess
 import os
 import os.path
 
 import rospy
 import actionlib
 import japanese_text_to_speech.msg
+
+from nao_interaction_msgs.srv import AudioPlayback, AudioPlaybackRequest
 
 class JapaneseTextToSpeech:
     _TEMPORALY_DIR = '/tmp/japanese_text_to_speech'
@@ -18,6 +21,10 @@ class JapaneseTextToSpeech:
         self._dictionary_dir = rospy.get_param('~dictionary_dir', '/var/lib/mecab/dic/open-jtalk/naist-jdic')
         self._hts_voice_file = rospy.get_param('~hts_voice_file', '/usr/share/hts-voice/nitech-jp-atr503-m001/nitech_jp_atr503_m001.htsvoice')
         self._player_command = rospy.get_param('~player_command', 'aplay')
+
+        self.nao_ip = os.getenv('NAO_IP')
+        rospy.wait_for_service('/naoqi_driver/play_audio_file')
+        self.play_audio_file_service = rospy.ServiceProxy('/naoqi_driver/play_audio_file', AudioPlayback)
 
         if not os.path.isdir(self._TEMPORALY_DIR):
             os.mkdir(self._TEMPORALY_DIR)
@@ -55,7 +62,7 @@ class JapaneseTextToSpeech:
         input_text_file = open(self._INPUT_TEXT_FILE, 'w')
         input_text_file.write(input_text)
         input_text_file.close()
-    
+
     def generate_voice(self, speed_rate):
         feedback = japanese_text_to_speech.msg.SpeakFeedback()
         feedback.state = japanese_text_to_speech.msg.SpeakFeedback.GENERATING_VOICE
@@ -66,15 +73,46 @@ class JapaneseTextToSpeech:
         rospy.loginfo('Send command: %s', command)
         os.system(command)
 
+    def run_scp(self, source, host, destination):
+        try:
+            # SCPコマンドの構築
+            #command = f"scp {source} nao@{host}:{destination}"
+            command = "scp {} nao@{}:{}".format(source, host, destination)
+
+            # コマンドの実行
+            #result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            # 結果の取得
+            stdout, stderr = process.communicate()
+
+            # 結果の出力
+            if process.returncode == 0:
+                print("STDOUT:", stdout.decode('utf-8'))  # ここで .decode() を使用
+            else:
+                print("STDERR:", stderr.decode('utf-8'))  # ここで .decode() を使用
+        except Exception as e:
+            print("Error: {}".format(e))
+
+    def play_audio_file (self, file_name):
+        req = AudioPlaybackRequest()
+        tmp = "/audio_file/" + file_name
+        req.file_path.data = tmp
+        self.play_audio_file_service(req)
+
     def play_voice(self):
         feedback = japanese_text_to_speech.msg.SpeakFeedback()
         feedback.state = japanese_text_to_speech.msg.SpeakFeedback.PLAYING_VOICE
         self._action_server.publish_feedback(feedback)
 
+        self.run_scp("/tmp/japanese_text_to_speech/generated_voice.wav", str(self.nao_ip), "/home/nao/audio_file/")
         rospy.loginfo('Playing wav file...')
-        command = self._player_command + ' ' + self._GENERATED_VOICE_FILE
-        rospy.loginfo('Send command: %s', command)
-        os.system(command)
+        self.play_audio_file("generated_voice.wav")
+        rospy.loginfo('Playing wav file finished')
+
+        #command = self._player_command + ' ' + self._GENERATED_VOICE_FILE
+        #rospy.loginfo('Send command: %s', command)
+        #os.system(command)
 
 if __name__ == '__main__':
     rospy.init_node('japanese_text_to_speech')
